@@ -29,8 +29,6 @@ if not LIB_DIR in sys.path:
     sys.path.append(LIB_DIR)
 
 # import modules for Pommerman
-from a.agents import RandomAgent
-from a.pommerman.agents import SimpleAgent
 from a.pommerman.configs import create_game_config
 from a.pommerman.envs.v0 import Pomme
 from a.pommerman.characters import Agent
@@ -79,18 +77,6 @@ def main():
     # Instantiate the environment
     config = create_game_config(args)   # game configuration: ffa, team_radio, team_random etc.
 
-    # these won't be callable and wrapped in PyTorch so might create issues
-    # envs = [Pomme(**config["env_kwargs"]) for i in range(args.num_processes)]
-    # Add four random agents
-
-    # XXX: we don't need this since it's done in make_env
-    # agents = {}
-    # for agent_id in range(4):
-    #     agents[agent_id] = RandomAgent(config["agent"](agent_id, config["game_type"]))
-    # for i in range(args.num_processes):
-    #     envs[i].set_agents(list(agents.values()))
-    #     envs[i].seed(args.seed + i)       # set seed
-
     # from ppo
     envs = [make_env(args, config, i) for i in range(args.num_processes)]
 
@@ -111,8 +97,6 @@ def main():
         elif args.model == 'resnet':
             actor_critic = [PommeResnetPolicy(obs_shape[0], envs.action_space, args) for i in range(args.nagents)]
     else:
-        assert not args.recurrent_policy, \
-            "Recurrent policy is not implemented for the MLP controller"
         actor_critic = [MLPPolicy(obs_shape[0], envs.action_space) for i in range(args.nagents)]
     # print("model ", args.model, "\n", actor_critic[0])
 
@@ -223,12 +207,8 @@ def main():
 
         for e in range(args.ppo_epoch):
             for i in range(args.nagents):
-                if args.recurrent_policy:
-                    data_generator = rollouts.recurrent_generator(advantages,
-                                                            args.num_mini_batch, args, i)
-                else:
-                    data_generator = rollouts.feed_forward_generator(advantages,
-                                                            args.num_mini_batch, args, i)
+                data_generator = rollouts.feed_forward_generator(advantages,
+                                                                 args.num_mini_batch, args, i)
 
                 for sample in data_generator:
                     observations_batch, states_batch, actions_batch, \

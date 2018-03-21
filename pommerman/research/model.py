@@ -89,9 +89,6 @@ class PommeCNNPolicy(FFPolicy):
         self.fc2 = nn.Linear(1024, 512)
         self.fc_bn2 = nn.BatchNorm1d(512)
 
-        if args.recurrent_policy:
-            self.gru = nn.GRUCell(512, 512)
-
         self.critic_linear = nn.Linear(512, 1)
         self.actor_linear = nn.Linear(512, 1)
 
@@ -205,9 +202,6 @@ class PommeCNNPolicySmall(FFPolicy):
 
         self.fc2 = nn.Linear(1024, 512)
         self.fc_bn2 = nn.BatchNorm1d(512)
-
-        if args.recurrent_policy:
-            self.gru = nn.GRUCell(512, 512)
 
         self.critic_linear = nn.Linear(512, 1)
         self.actor_linear = nn.Linear(512, 1)
@@ -358,9 +352,6 @@ class ResNet(FFPolicy):
         self.value_linear1 = nn.Linear(args.board_size*args.board_size, args.num_channels)
         self.value_relu2 = nn.ReLU()
         self.value_linear2 = nn.Linear(args.num_channels, 1)
-
-        if args.recurrent_policy:
-            self.gru = nn.GRUCell(512, 512)
 
         if action_space.__class__.__name__ == "Discrete":
             num_outputs = action_space.n
