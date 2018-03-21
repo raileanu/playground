@@ -7,8 +7,6 @@ def get_args():
     parser = argparse.ArgumentParser(description='RL')
 
     # general for PPO
-    parser.add_argument('--algo', default='ppo',
-                        help='algorithm to use: a2c | ppo | acktr')
     parser.add_argument('--lr', type=float, default=7e-4,
                         help='learning rate (default: 7e-4)')
     parser.add_argument('--eps', type=float, default=1e-5,
@@ -67,13 +65,11 @@ def get_args():
                         help='port to run the server on (default: 8097)')
 
     # specific to Pommerman
-    parser.add_argument('--game_config', type=str, default='ffa_v0',
+    parser.add_argument('--config', type=str, default='ffa_v0',
                         help='game configuration such as Free For All (ffa_v0), Team Random (team_v0), Team Radio \
                         (default: ffa_v0) options: ffa_v0 | ffa_v0_fast | ffa_v1 | team_v0 | radio_v2')
     parser.add_argument('--nagents', type=int, default=4,
                         help='number of agents to train')
-    parser.add_argument('--nactions', type=int, default=6,
-                        help='number of possible actions')
     parser.add_argument('--num_channels', type=int, default=256,
                         help='number of channels in the convolutional layers')
     parser.add_argument('--board_size', type=int, default=13,

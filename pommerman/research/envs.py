@@ -4,31 +4,16 @@ import gym
 from gym.spaces.box import Box
 
 from baselines import bench
-from baselines.common.atari_wrappers import make_atari, wrap_deepmind
-
-try:
-    import pybullet_envs
-    import roboschool
-except ImportError:
-    pass
 
 import numpy as np
 
 
 # for Pommerman
-from a.pommerman.envs.v0 import Pomme
-from a.agents import RandomAgent
 from a.pommerman.agents import SimpleAgent
-from gym import spaces
 
-# from tensorforce.agents import PPOAgent
-# from tensorforce.execution import Runner
-# from tensorforce.contrib.openai_gym import OpenAIGym
-
-# pommerman
 def make_env(args, config, rank):
     def _thunk():
-        env = Pomme(**config["env_kwargs"])
+        env = config.env(**config["env_kwargs"])
         env.seed(args.seed + rank)
 
         agents = {}
@@ -44,26 +29,8 @@ def make_env(args, config, rank):
 
         return env
 
-    # _thunk()
-    # uncomment below when done debugging
-    # _thunk() # for debugging and printing in the _thunk fct: to make sure it creates the environment and there are no errors in the _thunk function
-    # _thunk()
     return _thunk
 
-class WrapPyTorch(gym.ObservationWrapper):
-    def __init__(self, env=None, obs_shape=(23,13,13)):
-        super(WrapPyTorch, self).__init__(env)
-        self.observation_space = Box(
-            self.observation_space.low[0],
-            self.observation_space.high[0],
-            [obs_shape[0], obs_shape[1], obs_shape[2]]
-        )
-
-    # XXX: what is the role of this?
-    def _observation(self, observation):
-        # XXX: need the agent_id to be able to do this
-        observation_feat = featurize3D(observation[0])  # XXX: only first agent - need to extend to 4 agents
-        return observation_feat#.transpose(2, 0, 1)
 
 # similar to PPO - no need to reset in here or anything
 # TODO: make obs_shape and others arguments
@@ -160,86 +127,3 @@ def featurize3D(obs, has_sep_board_feat=True, has_teammate_feat=True, has_enemie
         feature_maps = np.concatenate((board, bombs, position, ammo, blast_strength, can_kick))
 
     return feature_maps
-
-
-def featurize(obs):
-    board = obs["board"].reshape(-1).astype(np.float32)
-    bombs = obs["bombs"].reshape(-1).astype(np.float32)
-    position = make_np_float(obs["position"])
-    ammo = make_np_float([obs["ammo"]])
-    blast_strength = make_np_float([obs["blast_strength"]])
-    can_kick = make_np_float([obs["can_kick"]])
-
-    teammate = obs["teammate"]
-    if teammate is not None:
-        teammate = teammate.value
-    else:
-        teammate = -1
-    teammate = make_np_float([teammate])
-
-    enemies = obs["enemies"]
-    enemies = [e.value for e in enemies]
-    if len(enemies) < 3:
-        enemies = enemies + [-1]*(3 - len(enemies))
-    enemies = make_np_float(enemies)
-
-    return np.concatenate((board, bombs, position, ammo, blast_strength, can_kick, teammate, enemies))
-
-# changed OpenAIGym to gym.ObservationWrapper
-class WrappedEnv(gym.ObservationWrapper):
-    def __init__(self, gym, visualize=False):
-        self.gym = gym
-        self.visualize = visualize
-
-    def execute(self, actions):
-        if self.visualize:
-            self.gym.render()
-
-        obs = self.gym.get_observations()
-        all_actions = self.gym.act(obs)
-        all_actions.insert(self.gym.training_agent, actions)
-        state, reward, terminal, _ = self.gym.step(all_actions)
-        agent_state = featurize(state[self.gym.training_agent])
-        agent_reward = reward[self.gym.training_agent]
-        return agent_state, terminal, agent_reward
-
-    def reset(self):
-        obs = self.gym.reset()
-        agent_obs = featurize(obs[3])
-        return agent_obs
-
-
-# ppo
-# def make_env(env_id, seed, rank, log_dir):
-#     def _thunk():
-#         env = gym.make(env_id)
-#         is_atari = hasattr(gym.envs, 'atari') and isinstance(env.unwrapped, gym.envs.atari.atari_env.AtariEnv)
-#         if is_atari:
-#             env = make_atari(env_id)
-#         env.seed(seed + rank)
-#         if log_dir is not None:
-#             env = bench.Monitor(env, os.path.join(log_dir, str(rank)))
-#         if is_atari:
-#             env = wrap_deepmind(env)
-#         # If the input has shape (W,H,3), wrap for PyTorch convolutions
-#         obs_shape = env.observation_space.shape
-#         if len(obs_shape) == 3 and obs_shape[2] in [1, 3]:
-#             env = WrapPyTorch(env)
-#         print("env ppo ", env, type(env))
-#         return env
-#
-#     return _thunk
-#
-#
-# class WrapPyTorch(gym.ObservationWrapper):
-#     def __init__(self, env=None):
-#         super(WrapPyTorch, self).__init__(env)
-#         obs_shape = self.observation_space.shape
-#         self.observation_space = Box(
-#             self.observation_space.low[0,0,0],
-#             self.observation_space.high[0,0,0],
-#             [obs_shape[2], obs_shape[1], obs_shape[0]]
-#         )
-#
-#     def _observation(self, observation):
-#         return observation.transpose(2, 0, 1)
