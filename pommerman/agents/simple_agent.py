@@ -3,11 +3,11 @@ import random
 
 import numpy as np
 
-from ..agent_classes import Agent
+from . import BaseAgent
 from ..envs import utility
 
 
-class SimpleAgent(Agent):
+class SimpleAgent(BaseAgent):
     """This is a baseline agent. After you can beat it, submit your agent to compete."""
 
     def __init__(self, *args, **kwargs):
@@ -26,12 +26,12 @@ class SimpleAgent(Agent):
                 ret.append({'position': (r, c), 'blast_strength': int(bomb_map[(r, c)])})
             return ret
 
-        my_position = obs['position']
-        board = obs['board']
-        bombs = convert_bombs(obs['bombs'])
-        enemies = obs['enemies']
-        ammo = obs['ammo']
-        blast_strength = obs['blast_strength']
+        my_position = tuple(obs['position'])
+        board = np.array(obs['board'])
+        bombs = convert_bombs(np.array(obs['bomb_blast_strength']))
+        enemies = [utility.Item(e) for e in obs['enemies']]
+        ammo = int(obs['ammo'])
+        blast_strength = int(obs['blast_strength'])
         items, dist, prev = self._djikstra(board, my_position, bombs, enemies, depth=10)
 
         # Move if we are in an unsafe place.

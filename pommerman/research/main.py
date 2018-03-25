@@ -29,6 +29,7 @@ if not LIB_DIR in sys.path:
     sys.path.append(LIB_DIR)
 
 # import modules for Pommerman
+<<<<<<< HEAD
 from a.pommerman.configs import create_game_config
 from a.pommerman.envs.v0 import Pomme
 from a.pommerman.characters import Agent
@@ -44,6 +45,12 @@ args = get_args()
 
 assert args.algo == 'ppo'
 
+=======
+from ..configs import create_game_config
+
+args = get_args()
+
+>>>>>>> upstream/master
 # num_updates = number of samples collected for one round of updates = number of updates in one round
 # num_steps = horizon = number of steps in a rollout
 # num_processes = number of parallel processes/workers that run the environment and collect data
@@ -62,9 +69,15 @@ except OSError:
         os.remove(f)
 
 def main():
+<<<<<<< HEAD
     # print("#######")
     # print("WARNING: All rewards are clipped or normalized so you need to use a monitor (see envs.py) or visdom plot to get true rewards")
     # print("#######")
+=======
+    print("#######")
+    print("WARNING: All rewards are clipped or normalized so you need to use a monitor (see envs.py) or visdom plot to get true rewards")
+    print("#######")
+>>>>>>> upstream/master
 
     os.environ['OMP_NUM_THREADS'] = '1'
 
@@ -75,6 +88,7 @@ def main():
         win = None
 
     # Instantiate the environment
+<<<<<<< HEAD
     config = create_game_config(args)   # game configuration: ffa, team_radio, team_random etc.
 
     # from ppo
@@ -85,6 +99,13 @@ def main():
     else:
         envs = DummyVecEnv(envs)
 
+=======
+    config = create_game(args.config)
+
+    # from ppo
+    envs = [make_env(args, config, i) for i in range(args.num_processes)]
+    envs = SubprocVecEnv(envs) if args.num_processes > 1 else DummyVecEnv(envs)
+>>>>>>> upstream/master
     if len(envs.observation_space[0].shape) == 1:
         envs = VecNormalize(envs)
 
@@ -111,7 +132,11 @@ def main():
 
     optimizer = [optim.Adam(actor_critic[i].parameters(), args.lr, eps=args.eps) for i in range(args.nagents)]
 
+<<<<<<< HEAD
     rollouts = RolloutStorage(args.num_steps, args.nagents, args.num_processes, obs_shape, envs.action_space, actor_critic[0].state_size)
+=======
+    rollouts = [RolloutStorage(args.num_steps, args.num_processes, obs_shape, envs.action_space, actor_critic[0].state_size) for _ in range(args.nagents)]
+>>>>>>> upstream/master
     current_obs = torch.zeros(args.nagents, args.num_processes, *obs_shape)
 
     def update_current_obs(obs):
@@ -205,6 +230,7 @@ def main():
         advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
 
+<<<<<<< HEAD
         for e in range(args.ppo_epoch):
             for i in range(args.nagents):
                 data_generator = rollouts.feed_forward_generator(advantages,
@@ -220,6 +246,22 @@ def main():
                                                                                                    Variable(states_batch),
                                                                                                    Variable(masks_batch),
                                                                                                    Variable(actions_batch))
+=======
+        for i in range(args.nagents):
+            for e in range(args.ppo_epoch):
+                data_generator = rollouts[i].feed_forward_generator(advantages, args.num_mini_batch, args)
+
+                for sample in data_generator:
+                    observations_batch, states_batch, actions_batch, \
+                        return_batch, masks_batch, old_action_log_probs_batch, \
+                        adv_targ = sample
+
+                    # Reshape to do in a single forward pass for all steps
+                    values, action_log_probs, dist_entropy, states = actor_critic[i].evaluate_actions(Variable(observations_batch),
+                                                                                                      Variable(states_batch),
+                                                                                                      Variable(masks_batch),
+                                                                                                      Variable(actions_batch))
+>>>>>>> upstream/master
 
                     adv_targ = Variable(adv_targ)
                     ratio = torch.exp(action_log_probs - Variable(old_action_log_probs_batch))
@@ -228,12 +270,17 @@ def main():
                     action_loss = -torch.min(surr1, surr2).mean() # PPO's pessimistic surrogate (L^CLIP)
 
                     value_loss = (Variable(return_batch) - values).pow(2).mean()
+<<<<<<< HEAD
 
+=======
+                    
+>>>>>>> upstream/master
                     optimizer[i].zero_grad()
                     (value_loss + action_loss - dist_entropy * args.entropy_coef).backward()
                     nn.utils.clip_grad_norm(actor_critic[i].parameters(), args.max_grad_norm)
                     optimizer[i].step()
 
+<<<<<<< HEAD
         rollouts.after_update()
 
 
@@ -241,6 +288,14 @@ def main():
             save_path = os.path.join(args.save_dir, args.algo)
             try:
                 os.makedirs(save_path)
+=======
+            rollouts[i].after_update()
+
+
+        if j % args.save_interval == 0 and args.save_dir != "":
+            try:
+                os.makedirs(args.save_dir)
+>>>>>>> upstream/master
             except OSError:
                 pass
 
@@ -250,10 +305,15 @@ def main():
                 if args.cuda:
                     save_model = copy.deepcopy(actor_critic[i]).cpu()
 
+<<<<<<< HEAD
                 save_model = [save_model,
                                 hasattr(envs, 'ob_rms') and envs.ob_rms or None]
 
                 torch.save(save_model, os.path.join(save_path, args.env_name + ".pt"))
+=======
+                save_model = [save_model, hasattr(envs, 'ob_rms') and envs.ob_rms or None]
+                torch.save(save_model, os.path.join(args.save_dir, args.env_name + "-agent_%d.pt" % i))
+>>>>>>> upstream/master
 
         if j % args.log_interval == 0:
             end = time.time()
@@ -269,7 +329,11 @@ def main():
         if args.vis and j % args.vis_interval == 0:
             try:
                 # Sometimes monitor doesn't properly flush the outputs
+<<<<<<< HEAD
                 win = visdom_plot(viz, win, args.log_dir, args.env_name, args.algo)
+=======
+                win = visdom_plot(viz, win, args.log_dir, args.env_name, 'ppo')
+>>>>>>> upstream/master
             except IOError:
                 pass
 

@@ -15,7 +15,7 @@ class Agent(object):
         self.blast_strength = utility.DEFAULT_BLAST_STRENGTH
         self.can_kick = False
         if game_type == utility.GameType.FFA:
-            self.teammate = None
+            self.teammate = utility.Item.AgentDummy
             self.enemies = [getattr(utility.Item, 'Agent%d' % id_)
                             for id_ in range(4) if id_ != agent_id]
         else:
@@ -23,6 +23,7 @@ class Agent(object):
             self.teammate = getattr(utility.Item, 'Agent%d' % teammate_id)
             self.enemies = [getattr(utility.Item, 'Agent%d' % id_)
                             for id_ in range(4) if id_ != agent_id and id_ != teammate_id]
+            self.enemies.append(utility.Item.AgentDummy)
 
     def maybe_lay_bomb(self):
         if self.ammo > 0:
@@ -53,12 +54,12 @@ class Agent(object):
     def set_start_position(self, start_position):
         self.start_position = start_position
 
-    def reset(self):
+    def reset(self, ammo=1, is_alive=True, blast_strength=None, can_kick=False):
         self.position = self.start_position
-        self.ammo = 1
-        self.is_alive = True
-        self.blast_strength = utility.DEFAULT_BLAST_STRENGTH
-        self.can_kick = False
+        self.ammo = ammo
+        self.is_alive = is_alive
+        self.blast_strength = blast_strength or utility.DEFAULT_BLAST_STRENGTH
+        self.can_kick = can_kick
 
     def pick_up(self, item):
         if item == utility.Item.ExtraBomb:
@@ -77,19 +78,29 @@ class Agent(object):
                 self.blast_strength += 2
                 self.blast_strength = min(self.blast_strength, 10)
 
+    def to_json(self):
+        return {
+            "agent_id": self.agent_id,
+            "is_alive": self.is_alive,
+            "position": self.position,
+            "ammo": self.ammo,
+            "blast_strength": self.blast_strength,
+            "can_kick": self.can_kick
+        }
+
 
 class Bomb(object):
     """Container for the Bomb object."""
 
-    def __init__(self, bomber, position, life, blast_strength):
+    def __init__(self, bomber, position, life, blast_strength, moving_direction=None):
         self.bomber = bomber
         self.position = position
-        self._life = life
+        self.life = life
         self.blast_strength = blast_strength
-        self.moving_direction = None
+        self.moving_direction = moving_direction
 
     def tick(self):
-        self._life -= 1
+        self.life -= 1
 
     def move(self):
         if self.is_moving():
@@ -99,7 +110,7 @@ class Bomb(object):
         self.moving_direction = None
 
     def exploded(self):
-        return self._life == 0
+        return self.life == 0
 
     def explode(self):
         row, col = self.position
@@ -118,17 +129,32 @@ class Bomb(object):
     def is_moving(self):
         return self.moving_direction is not None
 
+    def to_json(self):
+        return {
+            "position": self.position,
+            "bomber_id": self.bomber.agent_id,
+            "life": self._life,
+            "blast_strength": self.blast_strength,
+            "moving_direction": self.moving_direction
+        }
+
 
 class Flame(object):
     """Container for Flame object."""
 
-    def __init__(self, position):
+    def __init__(self, position, life=2):
         self.position = position
-        self._life = 2
+        self._life = life
 
     def tick(self):
         self._life -= 1
 
     def is_dead(self):
         return self._life == 0
+
+    def to_json(self):
+        return {
+            "position": self.position,
+            "life": self._life
+        }
 

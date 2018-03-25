@@ -4,6 +4,7 @@ import gym
 from gym.spaces.box import Box
 
 from baselines import bench
+<<<<<<< HEAD
 from baselines.common.atari_wrappers import make_atari, wrap_deepmind
 
 try:
@@ -11,11 +12,14 @@ try:
     import roboschool
 except ImportError:
     pass
+=======
+>>>>>>> upstream/master
 
 import numpy as np
 
 
 # for Pommerman
+<<<<<<< HEAD
 from a.pommerman.envs.v0 import Pomme
 from a.agents import RandomAgent
 from a.pommerman.agents import SimpleAgent
@@ -29,6 +33,13 @@ from gym import spaces
 def make_env(args, config, rank):
     def _thunk():
         env = Pomme(**config["env_kwargs"])
+=======
+from a.pommerman.agents import SimpleAgent
+
+def make_env(args, config, rank):
+    def _thunk():
+        env = config.env(**config["env_kwargs"])
+>>>>>>> upstream/master
         env.seed(args.seed + rank)
 
         agents = {}
@@ -44,6 +55,7 @@ def make_env(args, config, rank):
 
         return env
 
+<<<<<<< HEAD
     # _thunk()
     # uncomment below when done debugging
     # _thunk() # for debugging and printing in the _thunk fct: to make sure it creates the environment and there are no errors in the _thunk function
@@ -64,6 +76,10 @@ class WrapPyTorch(gym.ObservationWrapper):
         # XXX: need the agent_id to be able to do this
         observation_feat = featurize3D(observation[0])  # XXX: only first agent - need to extend to 4 agents
         return observation_feat#.transpose(2, 0, 1)
+=======
+    return _thunk
+
+>>>>>>> upstream/master
 
 # similar to PPO - no need to reset in here or anything
 # TODO: make obs_shape and others arguments
@@ -160,6 +176,7 @@ def featurize3D(obs, has_sep_board_feat=True, has_teammate_feat=True, has_enemie
         feature_maps = np.concatenate((board, bombs, position, ammo, blast_strength, can_kick))
 
     return feature_maps
+<<<<<<< HEAD
 
 
 def featurize(obs):
@@ -243,3 +260,5 @@ class WrappedEnv(gym.ObservationWrapper):
 #
 #     def _observation(self, observation):
 #         return observation.transpose(2, 0, 1)
+=======
+>>>>>>> upstream/master
