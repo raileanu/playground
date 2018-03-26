@@ -4,13 +4,6 @@ import gym
 from gym.spaces.box import Box
 
 from baselines import bench
-from baselines.common.atari_wrappers import make_atari, wrap_deepmind
-
-try:
-    import pybullet_envs
-    import roboschool
-except ImportError:
-    pass
 
 import numpy as np
 

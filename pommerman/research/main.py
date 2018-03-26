@@ -29,21 +29,6 @@ if not LIB_DIR in sys.path:
     sys.path.append(LIB_DIR)
 
 # import modules for Pommerman
-from a.pommerman.configs import create_game_config
-from a.pommerman.envs.v0 import Pomme
-from a.pommerman.characters import Agent
-import a.utility
-
-# for Pommerman
-# from tensorforce.agents import PPOAgent
-# from tensorforce.execution import Runner
-# from tensorforce.contrib.openai_gym import OpenAIGym
-
-
-args = get_args()
-
-assert args.algo == 'ppo'
-
 from ..configs import create_game_config
 
 args = get_args()
@@ -218,6 +203,7 @@ def main():
                                                                                                       Variable(states_batch),
                                                                                                       Variable(masks_batch),
                                                                                                       Variable(actions_batch))
+
                     adv_targ = Variable(adv_targ)
                     ratio = torch.exp(action_log_probs - Variable(old_action_log_probs_batch))
                     surr1 = ratio * adv_targ
@@ -225,6 +211,7 @@ def main():
                     action_loss = -torch.min(surr1, surr2).mean() # PPO's pessimistic surrogate (L^CLIP)
 
                     value_loss = (Variable(return_batch) - values).pow(2).mean()
+
                     optimizer[i].zero_grad()
                     (value_loss + action_loss - dist_entropy * args.entropy_coef).backward()
                     nn.utils.clip_grad_norm(actor_critic[i].parameters(), args.max_grad_norm)
