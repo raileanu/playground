@@ -332,7 +332,7 @@ def make_np_float(feature):
 class ForwardModel(object):
     """Class for helping with the [forward] modeling. Abstracts out the game state."""
 
-    def run(self, num_times, board, agents, bombs, items, flames, is_partially_observable, agent_view_size, action_space, is_communicative=False):
+    def run(self, num_times, board, agents, bombs, items, flames, is_partially_observable, agent_view_size, action_space, training_agents, is_communicative=False):
         """Run the forward model.
 
         Args:
@@ -364,7 +364,7 @@ class ForwardModel(object):
             board, agents, bombs, items, flames = self.step(actions, board, agents, bombs, items, flames)
             next_obs = self.get_observations(board, agents, bombs, is_partially_observable, agent_view_size)
             reward = self.get_rewards(agents, game_type, step_count, max_steps)
-            done = self.get_done(agents, game_type, step_count, max_steps, training_agent)
+            done = self.get_done(agents, game_type, step_count, max_steps, training_agents)
             info = self.get_info(done, rewards, game_type, agents)
 
             steps.append({
@@ -607,6 +607,9 @@ class ForwardModel(object):
             bomb_blast_strengths, bomb_life = make_bomb_maps(agent.position)
             agent_obs['bomb_blast_strength'] = bomb_blast_strengths
             agent_obs['bomb_life'] = bomb_life
+            # We include the number of different items here so that agents have access to all
+            # of the possible varieties they'll see.
+            agent_obs['num_diff_items'] = len(Item)
 
             for attr in attrs:
                 assert hasattr(agent, attr)
@@ -615,13 +618,14 @@ class ForwardModel(object):
         return observations
 
     @staticmethod
-    def get_done(agents, step_count, max_steps, game_type, training_agent):
+    def get_done(agents, step_count, max_steps, game_type, training_agents):
         alive = [agent for agent in agents if agent.is_alive]
         alive_ids = sorted([agent.agent_id for agent in alive])
         if step_count >= max_steps:
             return True
         elif game_type == GameType.FFA:
-            if training_agent is not None and training_agent not in alive_ids:
+            if training_agents is not None and all([agent not in alive_ids
+                                                    for agent in training_agents]):
                 return True
             return len(alive) <= 1
         elif any([

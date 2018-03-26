@@ -25,7 +25,7 @@ def clean_up_agents(agents):
     return [agent.shutdown() for agent in agents]
 
 
-class WrappedEnv(OpenAIGym):    
+class WrappedEnv(OpenAIGym):
     def __init__(self, gym, visualize=False):
         self.gym = gym
         self.visualize = visualize
@@ -36,15 +36,15 @@ class WrappedEnv(OpenAIGym):
 
         obs = self.gym.get_observations()
         all_actions = self.gym.act(obs)
-        all_actions.insert(self.gym.training_agent, actions)
+        all_actions.insert(self.gym.training_agents[0], actions)
         state, reward, terminal, _ = self.gym.step(all_actions)
-        agent_state = self.gym.featurize(state[self.gym.training_agent])
-        agent_reward = reward[self.gym.training_agent]
+        agent_state = self.gym.featurize(state[self.gym.training_agent[0]])
+        agent_reward = reward[self.gym.training_agent[0]]
         return agent_state, terminal, agent_reward
 
     def reset(self):
         obs = self.gym.reset()
-        agent_obs = self.gym.featurize(obs[3])
+        agent_obs = self.gym.featurize(obs[self.gym.training_agents[0]])
         return agent_obs
 
 
@@ -96,7 +96,7 @@ def main():
     )
     env = config.env(**config.env_kwargs)
     env.set_agents(_agents)
-    env.set_training_agent(training_agent.agent_id)
+    env.set_training_agents([training_agent.agent_id])
     env.seed(0)
 
     # Create a Proximal Policy Optimization agent
