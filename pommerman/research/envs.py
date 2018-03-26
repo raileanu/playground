@@ -1,129 +1,141 @@
 import os
 
+from baselines import bench
 import gym
 from gym.spaces.box import Box
-
-from baselines import bench
-
 import numpy as np
 
+from pommerman.agents import SimpleAgent
 
-# for Pommerman
-from a.pommerman.agents import SimpleAgent
 
-def make_env(args, config, rank):
+def make_env(args, config, rank, training_agents):
     def _thunk():
         env = config.env(**config["env_kwargs"])
         env.seed(args.seed + rank)
 
-        agents = {}
-        for agent_id in range(args.nagents):
-            agents[agent_id] = SimpleAgent(config["agent"](agent_id, config["game_type"]))
-        env.set_agents(list(agents.values()))
+        if args.how_train == 'simple':
+            agents = [SimpleAgent(config.agent(config.game_type))
+                      for _ in range(3)]
+            training_agent_id = rank % 4
+            agents.insert(training_agent_id, training_agents[0])
+            env.set_agents(agents)
+            env.set_training_agents([training_agent_id])
+        elif args.how_train == 'homogenous':
+            env.set_agents(training_agents*4)
+            env.set_training_agents(list(range(4)))
+        else:
+            raise
 
-        # XXX: should we use the monitor or not? bug when using it - in sum(self.rewards) line 64
-        # if args.log_dir is not None:
-        #     env = bench.Monitor(env, os.path.join(args.log_dir, str(rank)))
-
-        env = WrapPomme(env)
-
+        env = WrapPomme(env, args.how_train)
         return env
-
     return _thunk
 
 
 # similar to PPO - no need to reset in here or anything
 # TODO: make obs_shape and others arguments
 class WrapPomme(gym.ObservationWrapper):
-    def __init__(self, env=None):
+    def __init__(self, env=None, how_train='simple'):
         super(WrapPomme, self).__init__(env)
+        self._how_train = how_train
 
-        obs_shape = (23,13,13)           # XXX: make this an argument
-        self.observation_space = [Box(
-            self.observation_space.low[0],
-            self.observation_space.high[0],
-            [obs_shape[0], obs_shape[1], obs_shape[2]]) for i in range(4)]
+        obs_shape = (25,13,13)
+        print("WRAPPOM: ", self.observation_space)
+        self.observation_space = [
+            Box(self.observation_space.low[0], self.observation_space.high[0],
+                [obs_shape[0], obs_shape[1], obs_shape[2]])
+            for _ in self.env.training_agents
+        ]
 
-    # XXX: featurizes the observation space from dictionary to feature maps whenever you get to observe the environment
+    @staticmethod
+    def _filter(arr):
+        # TODO: Is arr always an np.array If so, can make this better.
+        return np.array([arr[i] for i in self.env.training_agents])
+
     def _observation(self, observation):
-        # XXX: need the agent_id to be able to do this
-        observation_feat = [featurize3D(observation[i]) for i in range(4)]  # XXX: only first agent - need to extend to 4 agents
-        return observation_feat#.transpose(2, 0, 1)
+        filtered = self._filter(observation)
+        # TODO: Do we need to transpose this?
+        ret = [self._featurize3D(obs) for obs in filtered]
+        return ret
 
+    def step(self, actions):
+        if self._how_train == 'simple':
+            obs = self.env.get_observations()
+            all_actions = self.env.act(obs)
+            all_actions.insert(self.env.training_agents[0], actions)
+        elif self._how_train == 'homogenous':
+            all_actions = actions
 
-# added for Pommerman
-def make_np_float(feature):
-    return np.array(feature).astype(np.float32)
+        observation, reward, done, info = self.env.step(all_actions)
+        return self.observation(observation), self._filter(reward), self._filter(done), info
 
-# create 3D feature maps for Pommerman
-def featurize3D(obs, has_sep_board_feat=True, has_teammate_feat=True, has_enemies_feat=True):
-    map_size = len(obs["board"])
+    def reset(self, **kwargs):
+        return self._observation(self.gym.reset())
 
-    # XXX: if we want different feature maps for each item in the board such as:
-    # rigid wall, wooden wall, bomb, flames, fog, extra bomb, \
-    # extra bomb power up, increate range power up, can kick, skill puwer up, \
-    # agent0, agent1, agent2, agent3
-    # in the above order - total 14 features maps of 13x13 dims - so (14,13,13) array of 1/0
-    if has_sep_board_feat:
-        board = np.zeros((14, map_size, map_size))
-        for i in range(14):
-            mask = obs["board"] == i
+    @staticmethod
+    def _featurize3D(obs):
+        """Create 3D Feature Maps for Pommerman.
+
+        Args:
+          obs: The observation input. Should be for a single agent.
+
+        Returns:
+          A 3D Feature Map where each feature is of a 13x13 board. The features are:
+          - (15) Items in Pommerman's utility.Item enum.
+          - (2) Bomb blast strength and Bomb life.
+          - (1) Agent position.
+          - (1) Agent ammo.
+          - (1) Agent blast strength.
+          - (1) Whether agent can kick.
+          - (1) Teammate
+          - (3) Enemies
+        """
+        map_size = len(obs["board"])
+        num_diff_items = obs['num_diff_items']
+
+        board = np.zeros((num_diff_items, map_size, map_size))
+        for i in range(num_diff_items):
             board[i][obs["board"] == i] = 1
 
-    # single feature map for the board - ints
-    else:
-        board = obs["board"].astype(np.float32)
-        board = board.reshape(1, map_size, map_size)
+        # feature maps with ints for bomb blast strength and life.
+        bomb_blast_strength = obs["bomb_blast_strength"].astype(np.float32).reshape(1, map_size, map_size)
+        bomb_life = obs["bomb_life"].astype(np.float32).reshape(1, map_size, map_size)
 
-    # feature map with ints where bombs are corresponding to their blast range
-    bombs = obs["bombs"].astype(np.float32)
-    bombs = bombs.reshape(1, map_size, map_size)
+        # position of self.
+        position = np.zeros((map_size, map_size)).astype(np.float32)
+        position[obs["position"][0], obs["position"][1]] = 1
+        position = position.reshape(1, map_size, map_size)
 
-    # position of self agent - 1 at corresp location
-    position = np.zeros((map_size, map_size)).astype(np.float32)
-    position[obs["position"][0], obs["position"][1]] = 1
-    position = position.reshape(1, map_size, map_size)
+        # ammo of self agent: constant feature map.
+        ammo = np.ones((map_size, map_size)).astype(np.float32) * obs["ammo"]
+        ammo = ammo.reshape(1, map_size, map_size)
 
-    # ammo of self agent - constant feature map of corresp integer
-    ammo = np.ones((map_size, map_size)).astype(np.float32)*obs["ammo"]
-    ammo = ammo.reshape(1, map_size, map_size)
+        # blast strength of self agent: constant feature map
+        blast_strength = np.ones((map_size, map_size)).astype(np.float32) * obs["blast_strength"]
+        blast_strength = blast_strength.reshape(1, map_size, map_size)
 
-    # blast strength of self agent - constants feature map
-    blast_strength = np.ones((map_size, map_size)).astype(np.float32)*obs["blast_strength"]
-    blast_strength = blast_strength.reshape(1, map_size, map_size)
-
-    # whether the agent can kick - constant feature map of 1 or 0
-    if obs["can_kick"]:
-        can_kick = np.ones((map_size, map_size)).astype(np.float32)
-    else:
-        can_kick = np.zeros((map_size, map_size)).astype(np.float32)
-    can_kick = can_kick.reshape(1, map_size, map_size)
-
-    # if we want to include a feature map corresponding to its teammate (definitely in team_v0 etc.)
-    # XXX: may not want this in ffa_v0 since no_one is your team?
-    if has_teammate_feat:
-        if obs["teammate"] is not None:
-            teammate = np.ones((map_size, map_size)).astype(np.float32)*obs["teammate"].value
+        # whether the agent can kick: constant feature map of 1 or 0.
+        if obs["can_kick"]:
+            can_kick = np.ones((map_size, map_size)).astype(np.float32)
         else:
-            teammate = np.ones((map_size, map_size)).astype(np.float32)*(-1)
-        teammate = teammate.reshape(1, map_size, map_size)
+            can_kick = np.zeros((map_size, map_size)).astype(np.float32)
+        can_kick = can_kick.reshape(1, map_size, map_size)
 
-    # XXX: if we want to include a feature map for its enemies - similar to above
-    if has_enemies_feat:
-        enemies = np.zeros((3, map_size, map_size))
-        for i in range(len(obs["enemies"])):
-            enemies[i] = np.ones((map_size, map_size)).astype(np.float32)*obs["enemies"][i].value
+        # Teammate feature map.
+        teammate = None
         if obs["teammate"] is not None:
-            enemies[2] = np.ones((map_size, map_size)).astype(np.float32)*(-1)
+            # TODO: Change this to reflect AgentDummy
+            teammate = np.ones((map_size, map_size)).astype(np.float32) * obs["teammate"].value
+            teammate = teammate.reshape(1, map_size, map_size)
 
+        # Enemy feature maps.
+        enemies = np.ones((len(obs['enemies']), map_size, map_size)).astype(np.float32)
+        for i in range(len(obs["enemies"])):
+            enemies[i] *= obs["enemies"][i].value
 
-    if has_teammate_feat and has_enemies_feat:
-        feature_maps = np.concatenate((board, bombs, position, ammo, blast_strength, can_kick, teammate, enemies))
-    elif has_teammate_feat:
-        feature_maps = np.concatenate((board, bombs, position, ammo, blast_strength, can_kick, teammate))
-    elif has_enemies_feat:
-        feature_maps = np.concatenate((board, bombs, position, ammo, blast_strength, can_kick, enemies))
-    else:
-        feature_maps = np.concatenate((board, bombs, position, ammo, blast_strength, can_kick))
+        feature_maps = np.concatenate((
+            board, bomb_blast_strength, bomb_life, position, ammo, blast_strength, can_kick, enemies
+        ))
+        if teammate is not None:
+            feature_maps = np.concatenate((feature_maps, teammate))
 
-    return feature_maps
+        return feature_maps

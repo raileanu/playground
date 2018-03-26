@@ -9,7 +9,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
 from torch.autograd import Variable
 
 from arguments import get_args
@@ -20,6 +19,7 @@ from envs import make_env
 from model import CNNPolicy, MLPPolicy, PommeCNNPolicy, PommeResnetPolicy, PommeCNNPolicySmall
 from storage import RolloutStorage
 from visualize import visdom_plot
+import agent
 
 import numpy as np
 
@@ -29,7 +29,7 @@ if not LIB_DIR in sys.path:
     sys.path.append(LIB_DIR)
 
 # import modules for Pommerman
-from ..configs import create_game_config
+import ..configs as configs
 
 args = get_args()
 
@@ -59,43 +59,59 @@ def main():
 
     if args.vis:
         from visdom import Visdom
-        viz = Visdom(server='http://216.165.70.24', port=8097)
-        # viz = Visdom(port=args.port)
-        win = None
+        viz = Visdom(port=args.port)
 
     # Instantiate the environment
-    config = create_game(args.config)
+    config = eval(getattr(configs, args.config))
 
-    # from ppo
-    envs = [make_env(args, config, i) for i in range(args.num_processes)]
+    # We make this in order to get the shapes.
+    dummy_env = config.env(**config['env_kwargs'])
+    envs_shape = dummy_env.observation_space.shape
+    obs_shape = (envs_shape[0] * args.num_stack, *envs_shape[1:])
+    action_space = dummy_env.action_space
+    if len(envs_shape) == 3:
+        if model == 'convnet':
+            actor_critic = lambda saved_model: PommeCNNPolicySmall(obs_shape[0], action_space, args)
+        elif model == 'resnet':
+            actor_critic = lambda saved_model: PommeResnetPolicy(obs_shape[0], action_space, args)
+    else:
+        actor_critic = lambda saved_model: MLPPolicy(obs_shape[0], action_space)
+
+    # We need to get the agent = config.agent(agent_id, config.game_type) and then
+    # pass that agent into the agent.PPOAgent
+    training_agents = []
+    saved_models = args.saved_models
+    saved_models = saved_models.split(',') if saved_models else [None]*args.nagents
+    assert(len(saved_models)) == args.nagents
+    for saved_model in saved_models:
+        # TODO: implement the model loading.
+        model = actor_critic(saved_model)
+        agent = config.agent(config.game_type)
+        agent = ppo_agent.PPOAgent(agent, actor_critic)
+        training_agents.append(agent)
+
+    if args.how_train == 'simple':
+        # Simple trains a single agent against three SimpleAgents.
+        assert(args.nagents == 1), "Simple training should have a single agent."
+    elif args.how_train == 'homogenous':
+        # Homogenous trains a single agent against itself (self-play).
+        assert(args.nagents == 1), "Homogenous toraining should have a single agent."
+    elif args.how_train == 'heterogenous':
+        assert(args.nagents > 1), "Heterogenous training should have more than one agent."
+        print("Heterogenous training is not implemented yet.")
+        return
+
+    # This might not work. If the agents are shared ... then what does that mean for the threads?
+    envs = [make_env(args, config, i, training_agents) for i in range(args.num_processes)]
     envs = SubprocVecEnv(envs) if args.num_processes > 1 else DummyVecEnv(envs)
     if len(envs.observation_space[0].shape) == 1:
         envs = VecNormalize(envs)
 
-    obs_shape = envs.observation_space[0].shape
-    obs_shape = (obs_shape[0] * args.num_stack, *obs_shape[1:])
+    # action_shape = 1 if envs.action_space.__class__.__name__ == "Discrete": else envs.action_space.shape[0]
 
-    if len(envs.observation_space[0].shape) == 3:
-        if args.model == 'convnet':
-            actor_critic = [PommeCNNPolicySmall(obs_shape[0], envs.action_space, args) for i in range(args.nagents)]
-        elif args.model == 'resnet':
-            actor_critic = [PommeResnetPolicy(obs_shape[0], envs.action_space, args) for i in range(args.nagents)]
-    else:
-        actor_critic = [MLPPolicy(obs_shape[0], envs.action_space) for i in range(args.nagents)]
-    # print("model ", args.model, "\n", actor_critic[0])
+    for i in range(args.nagents):
+        agent[i].initialize(args, obs_shape, action_space)
 
-    if envs.action_space.__class__.__name__ == "Discrete":
-        action_shape = 1
-    else:
-        action_shape = envs.action_space.shape[0]
-
-    if args.cuda:
-        for i in range(args.nagents):
-            actor_critic[i].cuda()
-
-    optimizer = [optim.Adam(actor_critic[i].parameters(), args.lr, eps=args.eps) for i in range(args.nagents)]
-
-    rollouts = [RolloutStorage(args.num_steps, args.num_processes, obs_shape, envs.action_space, actor_critic[0].state_size) for _ in range(args.nagents)]
     current_obs = torch.zeros(args.nagents, args.num_processes, *obs_shape)
 
     def update_current_obs(obs):

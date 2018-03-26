@@ -68,12 +68,14 @@ def get_args():
     parser.add_argument('--config', type=str, default='ffa_v0',
                         help='game configuration such as Free For All (ffa_v0), Team Random (team_v0), Team Radio \
                         (default: ffa_v0) options: ffa_v0 | ffa_v0_fast | ffa_v1 | team_v0 | radio_v2')
-    parser.add_argument('--nagents', type=int, default=4,
-                        help='number of agents to train')
+    parser.add_argument('--nagents', type=int, default=1,
+                        help='number of agents to train. this is independent of the number of agents in a battle.')
+    parser.add_argument('--saved_models', type=str, default='',
+                        help='comma delineated paths to where the nagent # of agents are saved.')
+    parser.add_argument('--how-train', type=str, default='simple',
+                        help='how to train agents: simple, homogenous, heterogenous.')
     parser.add_argument('--num_channels', type=int, default=256,
                         help='number of channels in the convolutional layers')
-    parser.add_argument('--board_size', type=int, default=13,
-                        help='size of the board')
 
     args = parser.parse_args()
 
