@@ -27,7 +27,7 @@ def get_args():
                         help='max norm of gradients (default: 0.5)')
     parser.add_argument('--seed', type=int, default=1,
                         help='random seed (default: 1)')
-    parser.add_argument('--num-processes', type=int, default=16,
+    parser.add_argument('--num-processes', type=int, default=2, # TODO: Change back to 16.
                         help='how many training CPU processes to use (default: 16)')
     parser.add_argument('--num-steps', type=int, default=100,
                         help='number of forward steps in A2C (default: 5)')
@@ -41,7 +41,7 @@ def get_args():
                         help='number of batches for ppo (default: 32)')
     parser.add_argument('--clip-param', type=float, default=0.2,
                         help='ppo clip parameter (default: 0.2)')
-    parser.add_argument('--num-stack', type=int, default=1,
+    parser.add_argument('--num-stack', type=int, default=3,
                         help='number of frames to stack (default: 4)')
     parser.add_argument('--log-interval', type=int, default=10,
                         help='log interval, one log per n updates (default: 10)')
@@ -70,12 +70,17 @@ def get_args():
                         (default: ffa_v0) options: ffa_v0 | ffa_v0_fast | ffa_v1 | team_v0 | radio_v2')
     parser.add_argument('--nagents', type=int, default=1,
                         help='number of agents to train. this is independent of the number of agents in a battle.')
-    parser.add_argument('--saved_models', type=str, default='',
+    parser.add_argument('--saved-models', type=str, default='',
                         help='comma delineated paths to where the nagent # of agents are saved.')
+    parser.add_argument('--game-state-file', type=str, default='',
+                        help='a game state file from which to load.')
     parser.add_argument('--how-train', type=str, default='simple',
                         help='how to train agents: simple, homogenous, heterogenous.')
-    parser.add_argument('--num_channels', type=int, default=256,
+    parser.add_argument('--num-channels', type=int, default=256,
                         help='number of channels in the convolutional layers')
+    # TODO: Remove this. It's always 13.
+    parser.add_argument('--board_size', type=int, default=13,
+                        help='size of the board')
 
     args = parser.parse_args()
 

@@ -38,6 +38,7 @@ class FFPolicy(nn.Module):
         raise NotImplementedError
 
     def act(self, inputs, states, masks, deterministic=False):
+        print("ACTFFP: ", inputs.shape)
         value, x, states = self(inputs, states, masks)
         action = self.dist.sample(x, deterministic=deterministic)
         action_log_probs, dist_entropy = self.dist.logprobs_and_entropy(x, action)

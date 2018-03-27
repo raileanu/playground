@@ -1,8 +1,9 @@
+from collections import deque
 import os
 
 from baselines import bench
 import gym
-from gym.spaces.box import Box
+from gym import spaces
 import numpy as np
 
 from pommerman.agents import SimpleAgent
@@ -10,52 +11,61 @@ from pommerman.agents import SimpleAgent
 
 def make_env(args, config, rank, training_agents):
     def _thunk():
-        env = config.env(**config["env_kwargs"])
+        game_type = config['game_type']
+        agent_type = config['agent']
+        env = config['env'](**config["env_kwargs"])
         env.seed(args.seed + rank)
 
         if args.how_train == 'simple':
-            agents = [SimpleAgent(config.agent(config.game_type))
+            agents = [SimpleAgent(agent_type(game_type=game_type))
                       for _ in range(3)]
             training_agent_id = rank % 4
             agents.insert(training_agent_id, training_agents[0])
+            for agent_id, agent in enumerate(agents):
+                agent.set_agent_id(agent_id)
             env.set_agents(agents)
             env.set_training_agents([training_agent_id])
+            env.set_init_game_state(args.game_state_file)
         elif args.how_train == 'homogenous':
-            env.set_agents(training_agents*4)
+            # NOTE: We can't use just one agent character here because it needs to track its own state.
+            # We do that by instantiating three more copies. There is probably a better way.
+            copies = [
+                training_agents[0].copy(
+                    agent_type(agent_id=agent_id, game_type=game_type)()
+                ) for agent_id in range(4)
+            ]
+            env.set_agents(copies)
             env.set_training_agents(list(range(4)))
+            env.set_init_game_state(args.game_state_file)
         else:
             raise
 
         env = WrapPomme(env, args.how_train)
+        # TODO: Add the FrameStack in.
+        env = MultiAgentFrameStack(env, args.num_stack)
         return env
     return _thunk
 
 
-# similar to PPO - no need to reset in here or anything
-# TODO: make obs_shape and others arguments
 class WrapPomme(gym.ObservationWrapper):
     def __init__(self, env=None, how_train='simple'):
         super(WrapPomme, self).__init__(env)
         self._how_train = how_train
 
+        # TODO: make obs_shape an argument.
         obs_shape = (25,13,13)
-        print("WRAPPOM: ", self.observation_space)
-        self.observation_space = [
-            Box(self.observation_space.low[0], self.observation_space.high[0],
-                [obs_shape[0], obs_shape[1], obs_shape[2]])
-            for _ in self.env.training_agents
-        ]
+        self.observation_space = spaces.Box(
+            self.observation_space.low[0], self.observation_space.high[0],
+            [len(self.env.training_agents), obs_shape[0], obs_shape[1], obs_shape[2]]
+        )
 
-    @staticmethod
-    def _filter(arr):
+    def _filter(self, arr):
         # TODO: Is arr always an np.array If so, can make this better.
         return np.array([arr[i] for i in self.env.training_agents])
 
     def _observation(self, observation):
         filtered = self._filter(observation)
-        # TODO: Do we need to transpose this?
-        ret = [self._featurize3D(obs) for obs in filtered]
-        return ret
+        return np.array([self._featurize3D(obs) for obs in filtered])
 
     def step(self, actions):
         if self._how_train == 'simple':
@@ -66,10 +76,10 @@ class WrapPomme(gym.ObservationWrapper):
             all_actions = actions
 
         observation, reward, done, info = self.env.step(all_actions)
-        return self.observation(observation), self._filter(reward), self._filter(done), info
+        return self.observation(observation), self._filter(reward), done, info
 
     def reset(self, **kwargs):
-        return self._observation(self.gym.reset())
+        return self._observation(self.env.reset())
 
     @staticmethod
     def _featurize3D(obs):
@@ -139,3 +149,72 @@ class WrapPomme(gym.ObservationWrapper):
             feature_maps = np.concatenate((feature_maps, teammate))
 
         return feature_maps
+
+
+#######
+# The following were graciously taken from baselines because we don't want to install cv2.
+#######
+
+class MultiAgentFrameStack(gym.Wrapper):
+    def __init__(self, env, k):
+        """Stack k last frames.
+
+        Returns lazy array, which is much more memory efficient.
+
+        See Also
+        --------
+        baselines.common.atari_wrappers.LazyFrames
+        """
+        gym.Wrapper.__init__(self, env)
+        self.k = k
+        self.frames = deque([], maxlen=k)
+        shp = env.observation_space.shape
+        self.observation_space = spaces.Box(low=0, high=255, shape=(shp[0], shp[1] * k, shp[2], shp[3]), dtype=np.uint8)
+
+    def reset(self):
+        ob = self.env.reset()
+        for _ in range(self.k):
+            self.frames.append(ob)
+        return self._get_ob()
+
+    def step(self, action):
+        ob, reward, done, info = self.env.step(action)
+        self.frames.append(ob)
+        return self._get_ob(), reward, done, info
+
+    def _get_ob(self):
+        assert len(self.frames) == self.k
+        return LazyFrames(list(self.frames))
+
+
+class LazyFrames(object):
+    def __init__(self, frames):
+        """This object ensures that common frames between the observations are only stored once.
+        It exists purely to optimize memory usage which can be huge for DQN's 1M frames replay
+        buffers.
+
+        This object should only be converted to numpy array before being passed to the model.
+
+        You'd not believe how complex the previous solution was."""
+        self._frames = frames
+        self._out = None
+
+    def _force(self):
+        if self._out is None:
+            self._out = np.concatenate(self._frames, axis=1)
+            self._frames = None
+        return self._out
+
+    def __array__(self, dtype=None):
+        out = self._force()
+        if dtype is not None:
+            out = out.astype(dtype)
+        return out
+
+    def __len__(self):
+        return len(self._force())
+
+    def __getitem__(self, i):
+        return self._force()[i]
+
+

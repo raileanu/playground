@@ -3,21 +3,21 @@ from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
 
 
 class RolloutStorage(object):
-    def __init__(self, num_steps, num_processes, obs_shape, action_space, state_size):
-        self.observations = torch.zeros(num_steps + 1, num_processes, *obs_shape)
-        self.states = torch.zeros(num_steps + 1, num_processes, state_size)
-        self.rewards = torch.zeros(num_steps, num_processes, 1)
-        self.value_preds = torch.zeros(num_steps + 1, num_processes, 1)
-        self.returns = torch.zeros(num_steps + 1, num_processes, 1)
-        self.action_log_probs = torch.zeros(num_steps, num_processes, 1)
+    def __init__(self, num_steps, num_processes, obs_shape, action_space, state_size, num_training_per_episode):
+        self.observations = torch.zeros(num_steps + 1, num_processes, num_training_per_episode, *obs_shape)
+        self.states = torch.zeros(num_steps + 1, num_processes, num_training_per_episode, state_size)
+        self.rewards = torch.zeros(num_steps, num_processes, num_training_per_episode, 1)
+        self.value_preds = torch.zeros(num_steps + 1, num_processes, num_training_per_episode, 1)
+        self.returns = torch.zeros(num_steps + 1, num_processes, num_training_per_episode, 1)
+        self.action_log_probs = torch.zeros(num_steps, num_processes, num_training_per_episode, 1)
         if action_space.__class__.__name__ == 'Discrete':
             action_shape = 1
         else:
             action_shape = action_space.shape[0]
-        self.actions = torch.zeros(num_steps, num_processes, action_shape)
+        self.actions = torch.zeros(num_steps, num_processes, num_training_per_episode, action_shape)
         if action_space.__class__.__name__ == 'Discrete':
             self.actions = self.actions.long()
-        self.masks = torch.ones(num_steps + 1, num_processes, 1)
+        self.masks = torch.ones(num_steps + 1, num_processes, num_training_per_episode, 1)
 
     def cuda(self):
         self.observations = self.observations.cuda()

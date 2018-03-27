@@ -5,11 +5,12 @@ import time
 import sys
 
 import gym
+from pommerman import configs
 import numpy as np
 import torch
+from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
 
 from arguments import get_args
 from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
@@ -17,19 +18,9 @@ from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
 from baselines.common.vec_env.vec_normalize import VecNormalize
 from envs import make_env
 from model import CNNPolicy, MLPPolicy, PommeCNNPolicy, PommeResnetPolicy, PommeCNNPolicySmall
-from storage import RolloutStorage
+import ppo_agent
 from visualize import visdom_plot
-import agent
 
-import numpy as np
-
-# Add the library to the Python path so that we can import its modules
-LIB_DIR = os.path.abspath(os.path.join("..", "games"))
-if not LIB_DIR in sys.path:
-    sys.path.append(LIB_DIR)
-
-# import modules for Pommerman
-import ..configs as configs
 
 args = get_args()
 
@@ -62,17 +53,17 @@ def main():
         viz = Visdom(port=args.port)
 
     # Instantiate the environment
-    config = eval(getattr(configs, args.config))
+    config = getattr(configs, args.config)()
 
     # We make this in order to get the shapes.
-    dummy_env = config.env(**config['env_kwargs'])
-    envs_shape = dummy_env.observation_space.shape
-    obs_shape = (envs_shape[0] * args.num_stack, *envs_shape[1:])
+    dummy_env = make_env(args, config, -1, [config['agent'](game_type=config['game_type'])])()
+    envs_shape = dummy_env.observation_space.shape[1:]
+    obs_shape = (envs_shape[0], *envs_shape[1:])
     action_space = dummy_env.action_space
     if len(envs_shape) == 3:
-        if model == 'convnet':
+        if args.model == 'convnet':
             actor_critic = lambda saved_model: PommeCNNPolicySmall(obs_shape[0], action_space, args)
-        elif model == 'resnet':
+        elif args.model == 'resnet':
             actor_critic = lambda saved_model: PommeResnetPolicy(obs_shape[0], action_space, args)
     else:
         actor_critic = lambda saved_model: MLPPolicy(obs_shape[0], action_space)
@@ -86,103 +77,104 @@ def main():
     for saved_model in saved_models:
         # TODO: implement the model loading.
         model = actor_critic(saved_model)
-        agent = config.agent(config.game_type)
-        agent = ppo_agent.PPOAgent(agent, actor_critic)
+        agent = config['agent'](game_type=config['game_type'])
+        agent = ppo_agent.PPOAgent(agent, model)
         training_agents.append(agent)
 
     if args.how_train == 'simple':
         # Simple trains a single agent against three SimpleAgents.
         assert(args.nagents == 1), "Simple training should have a single agent."
+        num_training_per_episode = 1
     elif args.how_train == 'homogenous':
         # Homogenous trains a single agent against itself (self-play).
         assert(args.nagents == 1), "Homogenous toraining should have a single agent."
+        num_training_per_episode = 4
     elif args.how_train == 'heterogenous':
         assert(args.nagents > 1), "Heterogenous training should have more than one agent."
         print("Heterogenous training is not implemented yet.")
         return
 
-    # This might not work. If the agents are shared ... then what does that mean for the threads?
+    # NOTE: Does this actually work correctly? If the agents are shared, then will the threads operate independently?
     envs = [make_env(args, config, i, training_agents) for i in range(args.num_processes)]
     envs = SubprocVecEnv(envs) if args.num_processes > 1 else DummyVecEnv(envs)
-    if len(envs.observation_space[0].shape) == 1:
-        envs = VecNormalize(envs)
+    # TODO: Figure out how to render this for testing purposes. The following link may help:
+    # https://github.com/MG2033/A2C/blob/master/envs/subproc_vec_env.py
 
-    # action_shape = 1 if envs.action_space.__class__.__name__ == "Discrete": else envs.action_space.shape[0]
+    for agent in training_agents:
+        agent.initialize(args, obs_shape, action_space, num_training_per_episode)
 
-    for i in range(args.nagents):
-        agent[i].initialize(args, obs_shape, action_space)
-
-    current_obs = torch.zeros(args.nagents, args.num_processes, *obs_shape)
-
+    current_obs = torch.zeros(args.num_processes, num_training_per_episode, *obs_shape)
     def update_current_obs(obs):
-        shape_dim0 = envs.observation_space[0].shape[0]
-        obs = torch.from_numpy(obs).float()
-        if args.num_stack > 1:
-            current_obs[:, :, :-shape_dim0] = current_obs[:, :, shape_dim0:]
-        current_obs[:, :, -shape_dim0:] = obs
+        current_obs = torch.from_numpy(obs).float()
 
     obs = envs.reset()
     update_current_obs(obs)
-    rollouts.observations[0,:,:,:,:,:].copy_(current_obs)
+    if args.how_train == 'simple':
+        training_agents[0].update_rollouts(obs=current_obs, timestep=0)
+    elif args.how_train == 'homogenous':
+        training_agents[0].update_rollouts(obs=current_obs, timestep=0)
 
     # These variables are used to compute average rewards for all processes.
-    episode_rewards = torch.zeros([args.num_processes, args.nagents, 1])
-    final_rewards = torch.zeros([args.num_processes, args.nagents, 1])
+    # TODO: Should this have 1 on the end?
+    episode_rewards = torch.zeros([args.num_processes, num_training_per_episode, 1])
+    final_rewards = torch.zeros([args.num_processes, num_training_per_episode, 1])
 
     if args.cuda:
         current_obs = current_obs.cuda()
-        rollouts.cuda()
+        for agent in training_agents:
+            agent.cuda()
 
     start = time.time()
     for j in range(num_updates):
         for step in range(args.num_steps):
-            # Sample actions
             value_agents = []
             action_agents = []
             action_log_prob_agents = []
             states_agents = []
             episode_reward = []
-            cpu_actions_agents = [[-1 for k in range(args.nagents)] for i in range(args.num_processes)]
-            for i in range(args.nagents):
-                value, action, action_log_prob, states = actor_critic[i].act(Variable(rollouts.observations[step][i], volatile=True),
-                                                                          Variable(rollouts.states[step][i], volatile=True),
-                                                                          Variable(rollouts.masks[step][i], volatile=True))
+            cpu_actions_agents = []
 
+            if args.how_train == 'simple':
+                value, action, action_log_prob, states = training_agents[0].act_pytorch(step, 0)
                 value_agents.append(value)
                 action_agents.append(action)
                 action_log_prob_agents.append(action_log_prob)
                 states_agents.append(states)
-
                 cpu_actions = action.data.squeeze(1).cpu().numpy()
-                for k in range(args.num_processes):
-                    cpu_actions_agents[k][i] = cpu_actions[k]
+                cpu_actions_agents = cpu_actions
+            elif args.how_train == 'homogenous':
+                # TODO: Unite this properly with the "simple" scenario.
+                cpu_actions_agents = [[None for _ in range(4)] for i in range(args.num_processes)]
+                for i in range(4):
+                    value, action, action_log_prob, states = training_agents[0].act_pytorch(step, i)
+                    value_agents.append(value)
+                    action_agents.append(action)
+                    action_log_prob_agents.append(action_log_prob)
+                    states_agents.append(states)
+                    cpu_actions = action.data.squeeze(1).cpu().numpy()
+                    for k in range(args.num_processes):
+                        cpu_actions_agents[k][i] = cpu_actions[k]
 
             obs, reward, done, info = envs.step(cpu_actions_agents)
-
             reward = torch.from_numpy(np.stack(reward)).float()
-
             episode_rewards += reward
-            episode_rewards = episode_rewards.view(args.num_processes, args.nagents)
+            episode_rewards = episode_rewards.view(args.num_processes, num_training_per_episode)
 
-            # If done then clean the history of observations.
-            # XXX: shouldn't we have done for each agent in the game so that we can only update
-            # each agent in each episode as long as they are active - they don't all play the same
-            # number of steps in one episode since some of them die earlier than others
-            # they should also probably get the reward when they die
-            # XXX: changed this so that it takes a mask for each agent in the game - corresponding to whether the game is over or not
-            masks = torch.FloatTensor([[0.0, 0.0, 0.0, 0.0] if done_ else [1.0, 1.0, 1.0, 1.0] for done_ in done])
-            # masks = torch.FloatTensor([torch.zeros(args.nagents) if done_ else torch.ones(args.nagents) for done_ in done])
+            # If done, clean the history of observations.
+            masks = torch.FloatTensor([
+                [0.0]*num_training_per_episode if done_ else [1.0]*num_training_per_episode
+                for done_ in done
+            ])
             final_rewards *= masks
             final_rewards += (1 - masks) * episode_rewards
             episode_rewards *= masks
             if args.cuda:
                 masks = masks.cuda()
 
-            # transpose mask since it is num_processes x nagents and we need nagets x numprocesses for multiplying with current_obs
-            reward_all = reward.transpose(0,1).unsqueeze(2)
-            masks_all = masks.transpose(0,1).unsqueeze(2)    # masks: nagents x num_processes x 1
-            # current_obs: nagents x num_processes x 13 x 23 x 23
-            current_obs *= masks_all.unsqueeze(2).unsqueeze(2)  # masks: nagents x num_processes x 1 x 1 x 1
+            reward_all = reward.unsqueeze(2)
+            masks_all = masks.unsqueeze(2)
+            # masks: nagents x num_processes x 1 x 1 x 1
+            current_obs *= masks_all.unsqueeze(2).unsqueeze(2)  
             update_current_obs(obs)
 
             states_all = torch.from_numpy(np.stack([x.data for x in states_agents])).float()
@@ -190,8 +182,15 @@ def main():
             action_log_prob_all = torch.from_numpy(np.stack([x.data for x in action_log_prob_agents])).float()
             value_all = torch.from_numpy(np.stack([x.data for x in value_agents])).float()
 
-            rollouts.insert(step, current_obs, states_all, action_all, action_log_prob_all, value_all, reward_all, masks_all)
+            if args.how_train == 'simple':
+                training_agents[0].insert_rollouts(
+                    step, current_obs, states_all, action_all, action_log_prob_all,
+                    value_all, reward_all, masks_all)
+            elif args.how_train == 'homogenous':
+                # TODO
+                pass
 
+        # TODO: Fix below. 
         next_value_agents = []
         for i in range(args.nagents):
             next_value = actor_critic[i](Variable(rollouts.observations[-1][i], volatile=True),
@@ -227,7 +226,7 @@ def main():
                     action_loss = -torch.min(surr1, surr2).mean() # PPO's pessimistic surrogate (L^CLIP)
 
                     value_loss = (Variable(return_batch) - values).pow(2).mean()
-                    
+
                     optimizer[i].zero_grad()
                     (value_loss + action_loss - dist_entropy * args.entropy_coef).backward()
                     nn.utils.clip_grad_norm(actor_critic[i].parameters(), args.max_grad_norm)
