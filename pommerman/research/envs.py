@@ -29,11 +29,15 @@ def make_env(args, config, rank, training_agents):
         elif args.how_train == 'homogenous':
             # NOTE: We can't use just one agent character here because it needs to track its own state.
             # We do that by instantiating three more copies. There is probably a better way.
-            copies = [
-                training_agents[0].copy(
-                    agent_type(agent_id=agent_id, game_type=game_type)()
-                ) for agent_id in range(4)
-            ]
+            if rank > -1:
+                copies = [
+                    training_agents[0].copy(
+                        agent_type(agent_id=agent_id, game_type=game_type)
+                    )
+                    for agent_id in range(4)
+                ]
+            else:
+                copies = training_agents*4
             env.set_agents(copies)
             env.set_training_agents(list(range(4)))
             env.set_init_game_state(args.game_state_file)
@@ -56,14 +60,15 @@ class WrapPomme(gym.ObservationWrapper):
         obs_shape = (25,13,13)
         self.observation_space = spaces.Box(
             self.observation_space.low[0], self.observation_space.high[0],
-            [len(self.env.training_agents), obs_shape[0], obs_shape[1], obs_shape[2]]
+            [len(self.env.training_agents), obs_shape[0], obs_shape[1], obs_shape[2]],
+            dtype=np.float32
         )
 
     def _filter(self, arr):
         # TODO: Is arr always an np.array If so, can make this better.
         return np.array([arr[i] for i in self.env.training_agents])
 
-    def _observation(self, observation):
+    def observation(self, observation):
         filtered = self._filter(observation)
         return np.array([self._featurize3D(obs) for obs in filtered])
 
@@ -79,7 +84,7 @@ class WrapPomme(gym.ObservationWrapper):
         return self.observation(observation), self._filter(reward), done, info
 
     def reset(self, **kwargs):
-        return self._observation(self.env.reset())
+        return self.observation(self.env.reset())
 
     @staticmethod
     def _featurize3D(obs):

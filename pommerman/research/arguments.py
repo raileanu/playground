@@ -27,11 +27,11 @@ def get_args():
                         help='max norm of gradients (default: 0.5)')
     parser.add_argument('--seed', type=int, default=1,
                         help='random seed (default: 1)')
-    parser.add_argument('--num-processes', type=int, default=2, # TODO: Change back to 16.
+    parser.add_argument('--num-processes', type=int, default=6, # TODO: Change back to 16.
                         help='how many training CPU processes to use (default: 16)')
-    parser.add_argument('--num-steps', type=int, default=100,
+    parser.add_argument('--num-steps', type=int, default=3, # TODO: Change back to more.
                         help='number of forward steps in A2C (default: 5)')
-    parser.add_argument('--num_layers', type=int, default=13,
+    parser.add_argument('--num-layers', type=int, default=13,
                         help='number of layers in the Resnet')
     parser.add_argument('--model', type=str, default='convnet',
                         help='neural net architecture of the policy')
@@ -74,7 +74,7 @@ def get_args():
                         help='comma delineated paths to where the nagent # of agents are saved.')
     parser.add_argument('--game-state-file', type=str, default='',
                         help='a game state file from which to load.')
-    parser.add_argument('--how-train', type=str, default='simple',
+    parser.add_argument('--how-train', type=str, default='homogenous',
                         help='how to train agents: simple, homogenous, heterogenous.')
     parser.add_argument('--num-channels', type=int, default=256,
                         help='number of channels in the convolutional layers')

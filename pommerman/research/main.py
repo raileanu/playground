@@ -9,8 +9,6 @@ from pommerman import configs
 import numpy as np
 import torch
 from torch.autograd import Variable
-import torch.nn as nn
-import torch.nn.functional as F
 
 from arguments import get_args
 from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
@@ -51,6 +49,7 @@ def main():
     if args.vis:
         from visdom import Visdom
         viz = Visdom(port=args.port)
+        win = None
 
     # Instantiate the environment
     config = getattr(configs, args.config)()
@@ -94,7 +93,7 @@ def main():
         print("Heterogenous training is not implemented yet.")
         return
 
-    # NOTE: Does this actually work correctly? If the agents are shared, then will the threads operate independently?
+    # NOTE: Does this work correctly? Will the threads operate independently?
     envs = [make_env(args, config, i, training_agents) for i in range(args.num_processes)]
     envs = SubprocVecEnv(envs) if args.num_processes > 1 else DummyVecEnv(envs)
     # TODO: Figure out how to render this for testing purposes. The following link may help:
@@ -103,7 +102,7 @@ def main():
     for agent in training_agents:
         agent.initialize(args, obs_shape, action_space, num_training_per_episode)
 
-    current_obs = torch.zeros(args.num_processes, num_training_per_episode, *obs_shape)
+    current_obs = torch.zeros(num_training_per_episode, args.num_processes, *obs_shape)
     def update_current_obs(obs):
         current_obs = torch.from_numpy(obs).float()
 
@@ -115,9 +114,8 @@ def main():
         training_agents[0].update_rollouts(obs=current_obs, timestep=0)
 
     # These variables are used to compute average rewards for all processes.
-    # TODO: Should this have 1 on the end?
-    episode_rewards = torch.zeros([args.num_processes, num_training_per_episode, 1])
-    final_rewards = torch.zeros([args.num_processes, num_training_per_episode, 1])
+    episode_rewards = torch.zeros([num_training_per_episode, args.num_processes, 1])
+    final_rewards = torch.zeros([num_training_per_episode, args.num_processes, 1])
 
     if args.cuda:
         current_obs = current_obs.cuda()
@@ -143,8 +141,7 @@ def main():
                 cpu_actions = action.data.squeeze(1).cpu().numpy()
                 cpu_actions_agents = cpu_actions
             elif args.how_train == 'homogenous':
-                # TODO: Unite this properly with the "simple" scenario.
-                cpu_actions_agents = [[None for _ in range(4)] for i in range(args.num_processes)]
+                cpu_actions_agents = [[] for _ in range(args.num_processes)]
                 for i in range(4):
                     value, action, action_log_prob, states = training_agents[0].act_pytorch(step, i)
                     value_agents.append(value)
@@ -152,19 +149,18 @@ def main():
                     action_log_prob_agents.append(action_log_prob)
                     states_agents.append(states)
                     cpu_actions = action.data.squeeze(1).cpu().numpy()
-                    for k in range(args.num_processes):
-                        cpu_actions_agents[k][i] = cpu_actions[k]
+                    for num_process in range(args.num_processes):
+                        cpu_actions_agents[num_process].append(cpu_actions[num_process])
 
             obs, reward, done, info = envs.step(cpu_actions_agents)
-            reward = torch.from_numpy(np.stack(reward)).float()
+            reward = torch.from_numpy(np.stack(reward)).float().transpose(0, 1)
             episode_rewards += reward
-            episode_rewards = episode_rewards.view(args.num_processes, num_training_per_episode)
 
             # If done, clean the history of observations.
             masks = torch.FloatTensor([
                 [0.0]*num_training_per_episode if done_ else [1.0]*num_training_per_episode
                 for done_ in done
-            ])
+            ]).transpose(0, 1)
             final_rewards *= masks
             final_rewards += (1 - masks) * episode_rewards
             episode_rewards *= masks
@@ -173,7 +169,6 @@ def main():
 
             reward_all = reward.unsqueeze(2)
             masks_all = masks.unsqueeze(2)
-            # masks: nagents x num_processes x 1 x 1 x 1
             current_obs *= masks_all.unsqueeze(2).unsqueeze(2)  
             update_current_obs(obs)
 
@@ -182,31 +177,28 @@ def main():
             action_log_prob_all = torch.from_numpy(np.stack([x.data for x in action_log_prob_agents])).float()
             value_all = torch.from_numpy(np.stack([x.data for x in value_agents])).float()
 
-            if args.how_train == 'simple':
+            if args.how_train in ['simple', 'homogenous']:
                 training_agents[0].insert_rollouts(
                     step, current_obs, states_all, action_all, action_log_prob_all,
                     value_all, reward_all, masks_all)
-            elif args.how_train == 'homogenous':
-                # TODO
-                pass
 
-        # TODO: Fix below. 
         next_value_agents = []
-        for i in range(args.nagents):
-            next_value = actor_critic[i](Variable(rollouts.observations[-1][i], volatile=True),
-                                        Variable(rollouts.states[-1][i], volatile=True),
-                                        Variable(rollouts.masks[-1][i], volatile=True))[0].data
-            next_value_agents.append(next_value)
+        if args.how_train == 'simple':
+            agent = training_agents[0]
+            next_value_agents.append(agent.run_actor_critic(-1, 0))
+            advantages = [agent.compute_advantages(next_value_agents, args.use_gae, args.gamma, args.tau)]
+        elif args.how_train == 'homogenous':
+            agent = training_agents[0]
+            next_value_agents = [agent.run_actor_critic(-1, num_agent) for num_agent in range(4)]
+            advantages = [agent.compute_advantages(next_value_agents, args.use_gae, args.gamma, args.tau)]
 
-        rollouts.compute_returns(next_value_agents, args.use_gae, args.gamma, args.tau, args.nagents)
+        final_action_losses = []
+        final_value_losses = []
+        final_dist_entropies = []
 
-        # PPO
-        advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
-
-        for i in range(args.nagents):
-            for e in range(args.ppo_epoch):
-                data_generator = rollouts[i].feed_forward_generator(advantages, args.num_mini_batch, args)
+        for num_agent, agent in enumerate(training_agents):
+            for _ in range(args.ppo_epoch):
+                data_generator = agent.feed_forward_generator(advantages[num_agent], args)
 
                 for sample in data_generator:
                     observations_batch, states_batch, actions_batch, \
@@ -214,27 +206,29 @@ def main():
                         adv_targ = sample
 
                     # Reshape to do in a single forward pass for all steps
-                    values, action_log_probs, dist_entropy, states = actor_critic[i].evaluate_actions(Variable(observations_batch),
-                                                                                                      Variable(states_batch),
-                                                                                                      Variable(masks_batch),
-                                                                                                      Variable(actions_batch))
+                    values, action_log_probs, dist_entropy, states = agent.evaluate_actions(
+                        Variable(observations_batch),
+                        Variable(states_batch),
+                        Variable(masks_batch),
+                        Variable(actions_batch))
 
                     adv_targ = Variable(adv_targ)
                     ratio = torch.exp(action_log_probs - Variable(old_action_log_probs_batch))
                     surr1 = ratio * adv_targ
                     surr2 = torch.clamp(ratio, 1.0 - args.clip_param, 1.0 + args.clip_param) * adv_targ
-                    action_loss = -torch.min(surr1, surr2).mean() # PPO's pessimistic surrogate (L^CLIP)
-
+                    action_loss = -torch.min(surr1, surr2).mean()
                     value_loss = (Variable(return_batch) - values).pow(2).mean()
+                    agent.optimize(value_loss, action_loss, dist_entropy, args.entropy_coef, args.max_grad_norm)
 
-                    optimizer[i].zero_grad()
-                    (value_loss + action_loss - dist_entropy * args.entropy_coef).backward()
-                    nn.utils.clip_grad_norm(actor_critic[i].parameters(), args.max_grad_norm)
-                    optimizer[i].step()
+            final_action_losses.append(action_loss)
+            final_value_losses.append(value_loss)
+            final_dist_entropies.append(dist_entropy)
 
-            rollouts[i].after_update()
+            agent.after_update()
 
-
+        #####
+        # Save model.
+        #####
         if j % args.save_interval == 0 and args.save_dir != "":
             try:
                 os.makedirs(args.save_dir)
@@ -242,25 +236,34 @@ def main():
                 pass
 
             # A really ugly way to save a model to CPU
-            for i in range(args.nagents):
-                save_model = actor_critic[i]
+            # TODO: Make better.
+            for num_agent, agent in enumerate(training_agents):
+                save_model = agent.get_model()
                 if args.cuda:
-                    save_model = copy.deepcopy(actor_critic[i]).cpu()
-
+                    save_model = copy.deepcopy(save_model).cpu()
                 save_model = [save_model, hasattr(envs, 'ob_rms') and envs.ob_rms or None]
-                torch.save(save_model, os.path.join(args.save_dir, args.env_name + "-agent_%d.pt" % i))
+                torch.save(save_model, os.path.join(args.save_dir, args.env_name + "-agent_%d.pt" % num_agent))
 
+        #####
+        # Log to console.
+        #####
         if j % args.log_interval == 0:
             end = time.time()
             total_num_steps = (j + 1) * args.num_processes * args.num_steps
-            print("Updates {}, num timesteps {}, FPS {}, mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}, entropy {:.5f}, value loss {:.5f}, policy loss {:.5f}".
+            print("Updates {}, num timesteps {}, FPS {}, mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}, avg entropy {:.5f}, avg value loss {:.5f}, avg policy loss {:.5f}".
                 format(j, total_num_steps,
                        int(total_num_steps / (end - start)),
                        final_rewards.mean(),
                        final_rewards.median(),
                        final_rewards.min(),
-                       final_rewards.max(), dist_entropy.data[0],
-                       value_loss.data[0], action_loss.data[0]))
+                       final_rewards.max(),
+                       np.mean([dist_entropy.data[0] for dist_entropy in final_dist_entropies]),
+                       np.mean([value_loss.data[0] for value_loss in final_value_losses]),
+                       np.mean([action_loss.data[0] for action_loss in final_action_losses])))
+
+        #####
+        # Log to Visdom.
+        #####
         if args.vis and j % args.vis_interval == 0:
             try:
                 # Sometimes monitor doesn't properly flush the outputs
