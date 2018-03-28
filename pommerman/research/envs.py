@@ -1,4 +1,5 @@
 import os
+import sys
 
 import gym
 from gym.spaces.box import Box
@@ -8,8 +9,18 @@ from baselines import bench
 import numpy as np
 
 
-# for Pommerman
-from a.pommerman.agents import SimpleAgent
+# Add the library to the Python path so that we can import its modules
+# LIB_DIR = os.path.abspath(os.path.join("../..", "pommerman"))
+# if not LIB_DIR in sys.path:
+#     sys.path.append(LIB_DIR)
+
+
+# from agents import SimpleAgent
+# from . import agents
+
+# TODO: fix bug here
+from .agents import SimpleAgent
+
 
 def make_env(args, config, rank):
     def _thunk():

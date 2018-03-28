@@ -29,7 +29,9 @@ if not LIB_DIR in sys.path:
     sys.path.append(LIB_DIR)
 
 # import modules for Pommerman
-from ..configs import create_game_config
+from . import create_game_config
+
+
 
 args = get_args()
 
