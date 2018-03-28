@@ -46,7 +46,7 @@ class Pomme(gym.Env):
         self._viewer = None
         self._is_partially_observable = is_partially_observable
 
-        self.training_agent = None
+        self.training_agents = None
         self.model = utility.ForwardModel()
 
         # Observation and Action Spaces. These are both geared towards a single agent even though the environment expects
@@ -81,8 +81,8 @@ class Pomme(gym.Env):
     def set_agents(self, agents):
         self._agents = agents
 
-    def set_training_agent(self, agent_id):
-        self.training_agent = agent_id
+    def set_training_agents(self, agent_ids):
+        self.training_agents = agent_ids
 
     def set_init_game_state(self, game_state_file):
         """Set the initial game state.
@@ -111,7 +111,7 @@ class Pomme(gym.Env):
         self._items = utility.make_items(self._board, self._num_items)
 
     def act(self, obs):
-        agents = [agent for agent in self._agents if agent.agent_id != self.training_agent]
+        agents = [agent for agent in self._agents if agent.agent_id not in self.training_agents]
         return self.model.act(agents, obs, self.action_space)
 
     def get_observations(self):
@@ -123,7 +123,7 @@ class Pomme(gym.Env):
         return self.model.get_rewards(self._agents, self._game_type, self._step_count, self._max_steps)
 
     def _get_done(self):
-        return self.model.get_done(self._agents, self._step_count, self._max_steps, self._game_type, self.training_agent)
+        return self.model.get_done(self._agents, self._step_count, self._max_steps, self._game_type, self.training_agents)
 
     def _get_info(self, done, rewards):
         return self.model.get_info(done, rewards, self._game_type, self._agents)
